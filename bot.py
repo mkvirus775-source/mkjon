@@ -1,5 +1,5 @@
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from datetime import datetime
 
@@ -10,34 +10,15 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=lo
 applicants = {}
 user_lang = {}
 
-def uz(name=""):
-    return (
-        f"👋 Assalomu alaykum, {name}!\n\n"
-        f"🏥 SofPharm HR Botiga xush kelibsiz!\n\n"
-        f"Rezyumengizni yuboring:\n"
-        f"📄 PDF fayl yoki 🖼 Rasm shaklida\n\n"
-        f"📞 Telefon raqamingizni ham yozing!"
-    )
-
-def ru(name=""):
-    return (
-        f"👋 Здравствуйте, {name}!\n\n"
-        f"🏥 Добро пожаловать в HR бот SofPharm!\n\n"
-        f"Отправьте ваше резюме:\n"
-        f"📄 PDF файл или 🖼 Фото\n\n"
-        f"📞 Также напишите ваш номер телефона!"
-    )
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     keyboard = [
         [InlineKeyboardButton("🇺🇿 O'zbek", callback_data="lang_uz"),
          InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_ru")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        f"🌐 Tilni tanlang / Выберите язык:",
-        reply_markup=reply_markup
+        "🌐 Tilni tanlang / Выберите язык:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 async def lang_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -47,14 +28,82 @@ async def lang_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = query.data.split('_')[1]
     user_lang[user.id] = lang
 
+    # Telefon raqam so'rash tugmasi
+    phone_button = KeyboardButton(
+        "📞 Raqamni yuborish" if lang == "uz" else "📞 Отправить номер",
+        request_contact=True
+    )
+    reply_markup = ReplyKeyboardMarkup([[phone_button]], resize_keyboard=True, one_time_keyboard=True)
+
     if lang == "uz":
-        await query.edit_message_text(uz(user.first_name))
+        await query.edit_message_text(
+            f"👋 Assalomu alaykum, {user.first_name}!\n\n"
+            f"🏥 SofPharm HR Botiga xush kelibsiz!\n\n"
+            f"📞 Avval telefon raqamingizni yuboring:"
+        )
+        await query.message.reply_text(
+            "Pastdagi tugmani bosing 👇",
+            reply_markup=reply_markup
+        )
     else:
-        await query.edit_message_text(ru(user.first_name))
+        await query.edit_message_text(
+            f"👋 Здравствуйте, {user.first_name}!\n\n"
+            f"🏥 Добро пожаловать в HR бот SofPharm!\n\n"
+            f"📞 Сначала отправьте ваш номер телефона:"
+        )
+        await query.message.reply_text(
+            "Нажмите кнопку ниже 👇",
+            reply_markup=reply_markup
+        )
+
+async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    lang = user_lang.get(user.id, "uz")
+    phone = update.message.contact.phone_number
+
+    # Telefon raqamni saqlash
+    if not phone.startswith('+'):
+        phone = '+' + phone
+    context.user_data['phone'] = phone
+
+    if lang == "uz":
+        await update.message.reply_text(
+            f"✅ Raqam saqlandi: {phone}\n\n"
+            f"📄 Endi rezyumengizni yuboring:\n"
+            f"PDF fayl yoki 🖼 Rasm shaklida",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    else:
+        await update.message.reply_text(
+            f"✅ Номер сохранён: {phone}\n\n"
+            f"📄 Теперь отправьте резюме:\n"
+            f"PDF файл или 🖼 Фото",
+            reply_markup=ReplyKeyboardRemove()
+        )
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     lang = user_lang.get(user.id, "uz")
+
+    # Telefon raqam tekshirish
+    if not context.user_data.get('phone'):
+        phone_button = KeyboardButton(
+            "📞 Raqamni yuborish" if lang == "uz" else "📞 Отправить номер",
+            request_contact=True
+        )
+        reply_markup = ReplyKeyboardMarkup([[phone_button]], resize_keyboard=True, one_time_keyboard=True)
+        if lang == "uz":
+            await update.message.reply_text(
+                "❗ Avval telefon raqamingizni yuboring!",
+                reply_markup=reply_markup
+            )
+        else:
+            await update.message.reply_text(
+                "❗ Сначала отправьте номер телефона!",
+                reply_markup=reply_markup
+            )
+        return
+
     applicants[user.id] = {
         'name': f"{user.first_name} {user.last_name or ''}".strip(),
         'username': f"@{user.username}" if user.username else "Yoq",
@@ -64,17 +113,32 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'file_id': update.message.document.file_id,
         'file_name': update.message.document.file_name or 'rezyume.pdf',
         'date': datetime.now().strftime("%d.%m.%Y %H:%M"),
-        'phone': context.user_data.get('phone', "Noma'lum")
+        'phone': context.user_data.get('phone')
     }
+
     if lang == "uz":
         await update.message.reply_text("✅ Rezyumengiz qabul qilindi!\n\nTez orada bog'lanamiz! 😊")
     else:
-        await update.message.reply_text("✅ Ваше резюме принято!\n\nМы свяжемся с вами в ближайшее время! 😊")
+        await update.message.reply_text("✅ Ваше резюме принято!\n\nМы свяжемся с вами! 😊")
+
     await notify_admin(context, applicants[user.id])
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     lang = user_lang.get(user.id, "uz")
+
+    if not context.user_data.get('phone'):
+        phone_button = KeyboardButton(
+            "📞 Raqamni yuborish" if lang == "uz" else "📞 Отправить номер",
+            request_contact=True
+        )
+        reply_markup = ReplyKeyboardMarkup([[phone_button]], resize_keyboard=True, one_time_keyboard=True)
+        if lang == "uz":
+            await update.message.reply_text("❗ Avval telefon raqamingizni yuboring!", reply_markup=reply_markup)
+        else:
+            await update.message.reply_text("❗ Сначала отправьте номер телефона!", reply_markup=reply_markup)
+        return
+
     applicants[user.id] = {
         'name': f"{user.first_name} {user.last_name or ''}".strip(),
         'username': f"@{user.username}" if user.username else "Yoq",
@@ -84,31 +148,24 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'file_id': update.message.photo[-1].file_id,
         'file_name': 'rezyume_rasm.jpg',
         'date': datetime.now().strftime("%d.%m.%Y %H:%M"),
-        'phone': context.user_data.get('phone', "Noma'lum")
+        'phone': context.user_data.get('phone')
     }
+
     if lang == "uz":
         await update.message.reply_text("✅ Rezyumengiz qabul qilindi!\n\nTez orada bog'lanamiz! 😊")
     else:
-        await update.message.reply_text("✅ Ваше резюме принято!\n\nМы свяжемся с вами в ближайшее время! 😊")
+        await update.message.reply_text("✅ Ваше резюме принято!\n\nМы свяжемся с вами! 😊")
+
     await notify_admin(context, applicants[user.id])
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     lang = user_lang.get(user.id, "uz")
-    text = update.message.text
-    if text.startswith('+') or text.startswith('998') or text.startswith('7') or text.startswith('8'):
-        context.user_data['phone'] = text
-        if user.id in applicants:
-            applicants[user.id]['phone'] = text
-        if lang == "uz":
-            await update.message.reply_text(f"📞 Raqamingiz saqlandi: {text}\n\nRahmat! 🙏")
-        else:
-            await update.message.reply_text(f"📞 Номер сохранён: {text}\n\nСпасибо! 🙏")
+
+    if lang == "uz":
+        await update.message.reply_text("📄 Rezyumengizni PDF yoki rasm shaklida yuboring.")
     else:
-        if lang == "uz":
-            await update.message.reply_text("📄 Rezyumengizni PDF yoki rasm shaklida yuboring.")
-        else:
-            await update.message.reply_text("📄 Отправьте резюме в формате PDF или фото.")
+        await update.message.reply_text("📄 Отправьте резюме в формате PDF или фото.")
 
 async def notify_admin(context: ContextTypes.DEFAULT_TYPE, data: dict):
     lang_flag = "🇺🇿" if data.get('lang') == "uz" else "🇷🇺"
@@ -117,7 +174,6 @@ async def notify_admin(context: ContextTypes.DEFAULT_TYPE, data: dict):
          InlineKeyboardButton("✅ Qabul", callback_data=f"accept_{data['user_id']}")],
         [InlineKeyboardButton("❌ Rad etish", callback_data=f"reject_{data['user_id']}")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     text = (
         f"🔔 YANGI ARIZA!\n"
         f"-------------------------\n"
@@ -128,7 +184,7 @@ async def notify_admin(context: ContextTypes.DEFAULT_TYPE, data: dict):
         f"📁 Fayl: {data['file_name']}\n"
         f"🌐 Til: {lang_flag}\n"
     )
-    await context.bot.send_message(chat_id=ADMIN_ID, text=text, reply_markup=reply_markup)
+    await context.bot.send_message(chat_id=ADMIN_ID, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
     try:
         if data['file_type'] == 'document':
             await context.bot.send_document(chat_id=ADMIN_ID, document=data['file_id'])
@@ -163,7 +219,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if lang == "uz":
                 msg = f"🎉 Tabriklaymiz, {name}!\n\nRezyumengiz qabul qilindi!\nTez orada bog'lanamiz!\n\nSofPharm HR 🏥"
             else:
-                msg = f"🎉 Поздравляем, {name}!\n\nВаше резюме принято!\nМы скоро свяжемся с вами!\n\nSofPharm HR 🏥"
+                msg = f"🎉 Поздравляем, {name}!\n\nВаше резюме принято!\nМы скоро свяжемся!\n\nSofPharm HR 🏥"
             await context.bot.send_message(chat_id=user_id, text=msg)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.message.reply_text(f"✅ {name} ga qabul xabari yuborildi!")
@@ -174,7 +230,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if lang == "uz":
                 msg = f"Salom, {name}!\n\nHozircha mos vakansiya topilmadi.\nKelajakda ham murojaat qiling!\n\nSofPharm HR 🏥"
             else:
-                msg = f"Здравствуйте, {name}!\n\nК сожалению, подходящей вакансии не нашлось.\nОбращайтесь в будущем!\n\nSofPharm HR 🏥"
+                msg = f"Здравствуйте, {name}!\n\nК сожалению, подходящей вакансии не нашлось.\nSofPharm HR 🏥"
             await context.bot.send_message(chat_id=user_id, text=msg)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.message.reply_text(f"❌ {name} ga rad javob yuborildi.")
@@ -189,10 +245,7 @@ async def reply_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Ishlatish: /reply USER_ID xabar")
         return
     try:
-        await context.bot.send_message(
-            chat_id=int(args[0]),
-            text=f"📨 SofPharm HR:\n\n{' '.join(args[1:])}"
-        )
+        await context.bot.send_message(chat_id=int(args[0]), text=f"📨 SofPharm HR:\n\n{' '.join(args[1:])}")
         await update.message.reply_text("✅ Yuborildi!")
     except Exception as e:
         await update.message.reply_text(f"Xato: {e}")
@@ -201,6 +254,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reply", reply_command))
+    app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
